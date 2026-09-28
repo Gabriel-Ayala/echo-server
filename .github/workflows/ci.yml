@@ -1,0 +1,46 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      KIND_CLUSTER_NAME: echo-ci
+      IMAGE: web-server-eccho:${{ github.sha }}
+      PULUMI_CONFIG_PASSPHRASE: local-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: infra/go.mod
+          cache-dependency-path: infra/go.sum
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER_NAME }}
+      - name: Test, build, and load image
+        run: ./scripts/ci.sh
+      - uses: pulumi/setup-pulumi@v2
+      - name: Deploy
+        working-directory: infra
+        run: |
+          mkdir -p .pulumi
+          pulumi stack init ci
+          pulumi config set image "$IMAGE"
+          pulumi config set clusterName "$KIND_CLUSTER_NAME"
+          pulumi up --yes
+      - name: Smoke test
+        working-directory: infra
+        run: |
+          namespace=$(pulumi stack output namespace)
+          service=$(pulumi stack output service)
+          kubectl --context "kind-$KIND_CLUSTER_NAME" -n "$namespace" port-forward "service/$service" 8080:80 > /tmp/echo-port-forward.log 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" || true' EXIT
+          curl --fail --silent --show-error --retry 20 --retry-connrefused --retry-delay 1 \
+            -H 'X-Test: ci' --data 'hello' 'http://localhost:8080/a/b?tag=one&tag=two' > /tmp/echo.json
+          jq -e '.path == "/a/b" and .body == "hello" and .params.tag == ["one", "two"] and .headers["X-Test"] == ["ci"]' /tmp/echo.json
+      - name: Destroy infrastructure
+        if: always()
+        working-directory: infra
+        run: pulumi destroy --yes --stack ci

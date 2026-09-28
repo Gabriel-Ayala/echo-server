@@ -1,0 +1,3 @@
+/bin/
+/infra/.pulumi/
+/infra/Pulumi.*.yaml

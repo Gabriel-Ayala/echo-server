@@ -1,0 +1,5 @@
+name: web-server-eccho
+runtime: go
+description: Echo service on a local Kind cluster
+backend:
+  url: file://./.pulumi
